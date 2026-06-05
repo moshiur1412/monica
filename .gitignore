@@ -70,4 +70,4 @@ Thumbs.db
 
 ## Lock files
 composer.lock
-# yarn.lock
+yarn.lock

@@ -2,7 +2,7 @@
 
 ## Assignment Overview
 
-Monica allows users to import contacts from CSV or vCard files. The current Monica v3 codebase (rewrite) has **no CSV import implementation** — it only supports contact import via the CardDAV protocol (vCard format) through sabre/dav integration. This project redesigns the import system end-to-end: from file upload to background processing, with progress tracking, error handling, and observability.
+Monica allows users to import contacts from CSV or vCard files. The current Monica v3 codebase (rewrite) had **no CSV import implementation** — it only supported contact import via the CardDAV protocol (vCard format) through sabre/dav integration. This project redesigns the import system end-to-end: from file upload to background processing, with progress tracking, error handling, and observability.
 
 ---
 
@@ -10,25 +10,24 @@ Monica allows users to import contacts from CSV or vCard files. The current Moni
 
 ### Key Files Investigated
 
-| File                                                                                 | Status             | Notes                                          |
-| ------------------------------------------------------------------------------------ | ------------------ | ---------------------------------------------- |
-| `app/Http/Controllers/ImportController.php`                                          | **Does not exist** | No import controller exists                    |
-| `app/Http/Controllers/ApiController.php`                                             | Exists             | Base API controller used as parent             |
-| `app/Models/Contact.php`                                                             | Exists             | Contact model with vCard sync fields           |
-| `app/Models/User.php`                                                                | Exists             | User model with account/vault relationships    |
-| `app/Models/Vault.php`                                                               | Exists             | Vault organizational unit for contacts         |
-| `app/Domains/Contact/Dav/Services/ImportVCard.php`                                   | Exists             | **Only existing import logic** — vCard via DAV |
-| `app/Domains/Contact/Dav/Jobs/UpdateVCard.php`                                       | Exists             | Queued vCard import job (single contact)       |
-| `app/Domains/Contact/ManageContact/Services/CreateContact.php`                       | Exists             | Contact creation service (reused)              |
-| `app/Domains/Contact/ManageContactInformation/Services/CreateContactInformation.php` | Exists             | Contact info service (reused)                  |
-| `routes/api.php`                                                                     | Exists             | No import routes exist                         |
-| `routes/web.php`                                                                     | Exists             | No import routes exist                         |
-| `database/migrations/`                                                               | Exists             | No import_jobs table exists                    |
-| `tests/`                                                                             | **Does not exist** | No test infrastructure exists at all           |
+| File                                                                                 | Status            | Notes                                          |
+| ------------------------------------------------------------------------------------ | ----------------- | ---------------------------------------------- |
+| `app/Http/Controllers/ImportController.php`                                          | **Did not exist** | No import controller existed                   |
+| `app/Http/Controllers/ApiController.php`                                             | Exists            | Base API controller used as parent             |
+| `app/Models/Contact.php`                                                             | Exists            | Contact model with vCard sync fields           |
+| `app/Models/User.php`                                                                | Exists            | User model with account/vault relationships    |
+| `app/Models/Vault.php`                                                               | Exists            | Vault organizational unit for contacts         |
+| `app/Domains/Contact/Dav/Services/ImportVCard.php`                                   | Exists            | **Only existing import logic** — vCard via DAV |
+| `app/Domains/Contact/Dav/Jobs/UpdateVCard.php`                                       | Exists            | Queued vCard import job (single contact)       |
+| `app/Domains/Contact/ManageContact/Services/CreateContact.php`                       | Exists            | Contact creation service (reused)              |
+| `app/Domains/Contact/ManageContactInformation/Services/CreateContactInformation.php` | Exists            | Contact info service (reused)                  |
+| `routes/api.php`                                                                     | Exists            | No import routes existed                       |
+| `database/migrations/`                                                               | Exists            | No `import_jobs` table existed                 |
+| `tests/`                                                                             | **Did not exist** | No test infrastructure existed                 |
 
 ### Current Import Flow (CardDAV-only)
 
-The only existing import path is through CardDAV protocol. There is **no file upload, no CSV parsing, no batch processing**.
+The only existing import path is through the CardDAV protocol. There was **no file upload, no CSV parsing, no batch processing**.
 
 ```
 External DAV Client (Apple Contacts, Thunderbird, etc.)
@@ -67,9 +66,9 @@ Contact created/updated with vCard stored in contacts.vcard
 - No progress tracking
 - No error reporting to users
 - No import history/audit trail
-- Zero test coverage (`tests/` directory does not exist)
+- Zero test coverage
 
-### Pre-Existing Issues in the Codebase
+### Existing Codebase Issues
 
 1. **Mixed primary key strategy**: `contacts` uses UUIDs (`HasUuids`), while `contact_information`, `addresses`, and `labels` use auto-increment `bigint`. The newer migration added a separate `uuid` column to date/task tables, creating a dual-key system.
 
@@ -101,7 +100,7 @@ Contact created/updated with vCard stored in contacts.vcard
 | `failed_rows`               | `integer`, default 0                                            | **Failed row count.** Incremented atomically alongside `processed_rows`. Enables failure rate monitoring (`failed_rows / total_rows`).                                                                                                                                                                                          |
 | `status`                    | `enum('pending','processing','completed','failed','cancelled')` | **Import lifecycle state.** Drives all business logic: batches check this flag for cancellation, monitoring queries detect stuck imports, API filters by status.                                                                                                                                                                |
 | `errors`                    | `JSON` (nullable)                                               | **Per-row error collection.** Array of `{row: int, message: string}` objects. Stored as JSON for flexibility. **Trade-off**: As the error count grows, querying/updating this column becomes expensive. At scale, migrate to a separate `import_job_errors` table. Limited to first 10 errors in API responses for performance. |
-| `started_at`                | `timestamp` (nullable)                                          | **Processing start time.** Set when `ProcessImportJob` begins. Used for ETA calculation: `rate = processed_rows / elapsed_seconds`, `remaining = (total - processed) / rate`. Also used for stuck import detection: `WHERE started_at < NOW() - INTERVAL 30 MINUTE`.                                                            |
+| `started_at`                | `timestamp` (nullable)                                          | **Processing start time.** Set when `ProcessImportJob` begins. Used for ETA calculation: `rate = processed_rows / elapsed_seconds`, `remaining = (total - processed) / rate`. Also used for stuck import detection.                                                                                                             |
 | `completed_at`              | `timestamp` (nullable)                                          | **Completion timestamp.** Set when batch `then()` callback fires. Used for: (a) average processing time metrics, (b) import history display.                                                                                                                                                                                    |
 | `cancelled_at`              | `timestamp` (nullable)                                          | **Cancellation timestamp.** Set when user calls `POST /api/import/:id/cancel`. Distinct from `completed_at` so monitoring can distinguish user-initiated cancellations from system failures.                                                                                                                                    |
 | `batch_size`                | `integer`, default 50                                           | **Rows per batch.** Stored per-import rather than hardcoded so it can be tuned per import (e.g., smaller batches for complex contact data, larger for simple). Enabled by a future admin setting or header parameter.                                                                                                           |
@@ -128,6 +127,26 @@ The assignment requires the HTTP endpoint to respond within **500ms**. Parsing a
 1. HTTP endpoint validates → stores file → creates DB record → dispatches job → returns 201
 2. Queue worker processes the file asynchronously in the background
 3. Progress is tracked via the `import_jobs` record
+
+### Queue Driver Setup
+
+The system uses Laravel's queue with the **database** driver. Three environments are involved:
+
+| Environment | Driver                | Configuration                                                   |
+| ----------- | --------------------- | --------------------------------------------------------------- |
+| Development | `database`            | `.env`: `QUEUE_CONNECTION=database`                             |
+| Testing     | `sync`                | `phpunit.xml`: `<env name="QUEUE_CONNECTION" value="sync"/>`    |
+| Production  | `database` or `redis` | `.env`: `QUEUE_CONNECTION=database` or `QUEUE_CONNECTION=redis` |
+
+The required queue tables (`jobs`, `job_batches`, `failed_jobs`) are created by Laravel's default migrations and already exist in this codebase.
+
+**Important:** In development, you must run a queue worker for imports to process:
+
+```bash
+php artisan queue:work
+```
+
+Without the worker, the import will remain in `pending` status indefinitely. Tests use `QUEUE_CONNECTION=sync` so they run deterministically without a queue worker.
 
 ### Batching Strategy
 
@@ -164,7 +183,7 @@ DB::transaction(function () use ($importJob, $processedInBatch, $failedInBatch, 
 });
 ```
 
-This creates a row-level lock in MySQL/PostgreSQL, preventing race conditions when multiple batches complete simultaneously. The `processed_rows += N` pattern is atomic even without the lock.
+This creates a row-level lock in MySQL, preventing race conditions when multiple batches complete simultaneously. The `processed_rows += N` pattern is atomic even without the lock.
 
 ### One Queue vs Per-Import Queues
 
@@ -174,18 +193,327 @@ This creates a row-level lock in MySQL/PostgreSQL, preventing race conditions wh
 
 ---
 
-## 4. Progress Tracking API
+## 4. Development Setup
 
-### Endpoints
+### Prerequisites
 
-| Method | Path                         | Description                                  | Performance Target |
-| ------ | ---------------------------- | -------------------------------------------- | ------------------ |
-| `POST` | `/api/import`                | Upload CSV, start import                     | <500ms             |
-| `GET`  | `/api/import`                | List recent imports (paginated)              | <50ms              |
-| `GET`  | `/api/import/:id`            | Detailed status with progress %, ETA, errors | <50ms              |
-| `POST` | `/api/import/:id/cancel`     | Cancel a running import                      | <50ms              |
-| `GET`  | `/api/import/:id/errors`     | Paginated per-row errors                     | <50ms              |
-| `GET`  | `/api/import/:id/errors.csv` | Download error CSV                           | <200ms             |
+- PHP 8.3+
+- MySQL 8.0+
+- Composer dependencies installed
+- Laravel queue tables migrated (already present)
+
+### Environment Configuration
+
+Ensure these values in `.env`:
+
+```ini
+QUEUE_CONNECTION=database
+DB_CONNECTION=mysql
+```
+
+The `QUEUE_CONNECTION=database` setting is critical — with `sync`, jobs execute immediately during the HTTP request, violating the <500ms upload target.
+
+### Quick Start
+
+```bash
+# Terminal 1: Start queue worker
+php artisan queue:work
+
+# Terminal 2: Get a test token
+curl http://localhost/get-token
+# → {"token":"...","vault_id":"..."}
+
+# Upload a CSV for import
+curl -X POST http://localhost/api/import \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@contacts.csv" \
+  -F "vault_id=<uuid>"
+# → 201 Created, status "pending"
+
+# Poll status (repeat until "completed")
+curl http://localhost/api/import/<id> \
+  -H "Authorization: Bearer <token>"
+```
+
+### Test Token Endpoint
+
+A convenience endpoint `GET /get-token` returns a valid Sanctum token and vault ID for the first user in the database. This is provided for quick API exploration during development and interviews.
+
+**Response** `200 OK`
+
+```json
+{
+  "token": "1|abc123...",
+  "vault_id": "01J0X1Y2Z3..."
+}
+```
+
+**Errors**
+
+| Status | Condition                                         |
+| ------ | ------------------------------------------------- |
+| 404    | No users found. Run migrations and seeders first. |
+
+---
+
+## 5. API Reference
+
+All endpoints require **Bearer token** authentication (`Authorization: Bearer <token>`).
+Endpoints that create or cancel imports require the `write` ability; read-only endpoints require `read`.
+
+### `POST /api/import` — Upload CSV and start import
+
+Upload a CSV or vCard file for background processing. The file is stored to disk, an `import_jobs` record is created, and a queue job is dispatched to parse and process it asynchronously.
+
+**Request** (`multipart/form-data`)
+
+| Param      | Type     | Required | Description                                                  |
+| ---------- | -------- | -------- | ------------------------------------------------------------ |
+| `file`     | `file`   | Yes      | CSV (`.csv`, `.txt`) or vCard (`.vcf`, `.vcard`). Max 100MB. |
+| `vault_id` | `string` | Yes      | UUID of the vault to import contacts into.                   |
+
+**Response** `201 Created`
+
+```json
+{
+  "data": {
+    "id": "01J0X1Y2Z3...",
+    "filename": "contacts.csv",
+    "total_rows": 0,
+    "processed_rows": 0,
+    "failed_rows": 0,
+    "status": "pending",
+    "progress_pct": 0,
+    "errors": [],
+    "started_at": null,
+    "completed_at": null,
+    "estimated_remaining_sec": null,
+    "created_at": "2026-06-05T12:00:00Z",
+    "updated_at": "2026-06-05T12:00:00Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Condition                  |
+| ------ | -------------------------- |
+| 422    | Missing file or vault_id   |
+| 422    | Invalid vault_id UUID      |
+| 422    | vault_id not found         |
+| 422    | File exceeds 100MB         |
+| 422    | File MIME type not allowed |
+
+---
+
+### `GET /api/import` — List imports
+
+Returns a paginated list of imports for the authenticated user, newest first.
+
+**Request** (query params)
+
+| Param      | Type      | Default | Description                 |
+| ---------- | --------- | ------- | --------------------------- |
+| `page`     | `integer` | 1       | Page number.                |
+| `per_page` | `integer` | 15      | Results per page (max 100). |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "01J0X1Y2Z3...",
+      "filename": "contacts.csv",
+      "total_rows": 1500,
+      "processed_rows": 750,
+      "failed_rows": 3,
+      "status": "processing",
+      "progress_pct": 50,
+      "errors": [
+        { "row": 12, "message": "Invalid email: 'bad'" },
+        { "row": 45, "message": "Missing required field: name" },
+        { "row": 88, "message": "Invalid email: 'foo'" }
+      ],
+      "started_at": "2026-06-05T11:55:00Z",
+      "completed_at": null,
+      "estimated_remaining_sec": 45,
+      "created_at": "2026-06-05T11:54:00Z",
+      "updated_at": "2026-06-05T11:55:30Z"
+    }
+  ],
+  "links": {
+    "first": "http://localhost/api/import?page=1",
+    "last": "http://localhost/api/import?page=5",
+    "prev": null,
+    "next": "http://localhost/api/import?page=2"
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 5,
+    "per_page": 15,
+    "to": 15,
+    "total": 72
+  }
+}
+```
+
+**Notes**
+
+- `errors` field is only included when status is `processing`, `completed`, or `failed`. Limited to first 10 errors.
+- `estimated_remaining_sec` is only included when status is `processing` and at least one row has been processed. Calculated as `(total_rows - processed_rows) / (processed_rows / elapsed_seconds)`.
+
+---
+
+### `GET /api/import/{id}` — Get import status
+
+Returns detailed status of a single import job.
+
+**Request** (path param)
+
+| Param | Type     | Description             |
+| ----- | -------- | ----------------------- |
+| `id`  | `string` | UUID of the import job. |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": {
+    "id": "01J0X1Y2Z3...",
+    "filename": "contacts.csv",
+    "total_rows": 500,
+    "processed_rows": 500,
+    "failed_rows": 0,
+    "status": "completed",
+    "progress_pct": 100,
+    "errors": [],
+    "started_at": "2026-06-05T11:55:00Z",
+    "completed_at": "2026-06-05T11:57:12Z",
+    "estimated_remaining_sec": null,
+    "created_at": "2026-06-05T11:54:00Z",
+    "updated_at": "2026-06-05T11:57:12Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Condition                                             |
+| ------ | ----------------------------------------------------- |
+| 404    | Import job not found, or belongs to a different user. |
+
+---
+
+### `POST /api/import/{id}/cancel` — Cancel an import
+
+Marks a running import as cancelled. Batch jobs that haven't started yet will skip; the currently running batch will check the flag between rows and stop gracefully.
+
+**Request** (path param)
+
+| Param | Type     | Description             |
+| ----- | -------- | ----------------------- |
+| `id`  | `string` | UUID of the import job. |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": {
+    "id": "01J0X1Y2Z3...",
+    "status": "cancelled",
+    "cancelled_at": "2026-06-05T12:05:00Z",
+    "processed_rows": 230,
+    "total_rows": 500,
+    "progress_pct": 46,
+    ...
+  }
+}
+```
+
+**Errors**
+
+| Status | Condition                                                                     |
+| ------ | ----------------------------------------------------------------------------- |
+| 404    | Import job not found, or belongs to a different user.                         |
+| 422    | Import is not currently processing (already completed, failed, or cancelled). |
+
+---
+
+### `GET /api/import/{id}/errors` — Paginated row errors
+
+Returns per-row errors for a completed or failed import, with pagination.
+
+**Request** (path + query)
+
+| Param      | Type      | Default | Description                    |
+| ---------- | --------- | ------- | ------------------------------ |
+| `id`       | `string`  | —       | UUID of the import job (path). |
+| `page`     | `integer` | 1       | Page number.                   |
+| `per_page` | `integer` | 10      | Results per page (max 100).    |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    { "row": 2, "message": "Missing required field: name" },
+    { "row": 5, "message": "Invalid email: 'bad@'" },
+    { "row": 7, "message": "Phone number is required" }
+  ],
+  "meta": {
+    "current_page": 1,
+    "per_page": 10,
+    "total": 3,
+    "last_page": 1
+  }
+}
+```
+
+**Errors**
+
+| Status | Condition                                             |
+| ------ | ----------------------------------------------------- |
+| 404    | Import job not found, or belongs to a different user. |
+
+---
+
+### `GET /api/import/{id}/errors.csv` — Download error CSV
+
+Downloads the original file with an appended `error` column. The error column contains the error message for each row (or is blank for successful rows). The file is reconstructed on-the-fly from the stored original file — no row data is persisted in the database.
+
+**Request** (path param)
+
+| Param | Type     | Description             |
+| ----- | -------- | ----------------------- |
+| `id`  | `string` | UUID of the import job. |
+
+**Response** `200 OK` — CSV file download
+
+```
+name,email,phone,error
+John Doe,john@example.com,+1234567890,
+,Bad Row,,Missing required field: name
+Jane,invalid-email,+9876543210,Invalid email: 'invalid-email'
+```
+
+Headers include:
+
+| Header                | Value                                        |
+| --------------------- | -------------------------------------------- |
+| `Content-Type`        | `text/csv`                                   |
+| `Content-Disposition` | `attachment; filename="contacts_errors.csv"` |
+
+**Errors**
+
+| Status | Condition                                             |
+| ------ | ----------------------------------------------------- |
+| 404    | Import job not found, or belongs to a different user. |
+| 404    | Original file has been deleted from storage.          |
+| 500    | Cannot read or parse the original file.               |
+
+---
 
 ### Progress Calculation
 
@@ -195,47 +523,52 @@ progress_pct = (processed_rows / total_rows) × 100
 estimated_remaining_sec = (total_rows - processed_rows) / (processed_rows / elapsed_seconds)
 ```
 
-The progress endpoint queries **only** the `import_jobs` table by primary key — no JOINs, no contact table scans. This guarantees <50ms response even at scale.
+Progress is computed from the `import_jobs` table directly — no JOINs on contact tables — guaranteeing <50ms reads even at scale.
 
 ### Error CSV Reconstruction Logic
 
-The error CSV includes the original row data plus an `error` column. Since we don't store every row in the database, we reconstruct by:
+The error CSV is built without storing every row's data in the database:
 
-1. **Re-read the original uploaded file** from `import_jobs.original_file_path` (stored on disk/S3)
+1. **Re-read the original uploaded file** from `import_jobs.original_file_path`
 2. **Parse headers** from the first line
 3. **Build an error map** keyed by row number from `import_jobs.errors` JSON
-4. **Iterate data rows**, appending the error message (or empty string) as an additional column
+4. **Iterate data rows**, appending the error message (or blank) as an additional column
 
 ```php
 $errors = $importJob->errors; // [{row: 2, message: "..."}, {row: 5, message: "..."}]
 $errorMap = collect($errors)->groupBy('row')->map(fn($items) => $items->pluck('message')->implode('; '));
 
-$fileContent = Storage::disk('local')->get($importJob->original_file_path);
-$lines = explode("\n", $fileContent);
+$content = Storage::disk('local')->get($importJob->original_file_path);
+$lines = explode("\n", str_replace(["\r\n", "\r"], "\n", $content));
+$lines = array_filter($lines, fn ($line) => trim($line) !== '');
 $headers = str_getcsv(array_shift($lines));
 
-$output = fopen('php://temp', 'r+');
-fputcsv($output, array_merge($headers, ['error']));
+$csv = fopen('php://temp', 'r+');
+fputcsv($csv, array_merge($headers, ['error']));
 
 foreach ($lines as $rowNum => $line) {
-    $data = str_getcsv($line);
-    $data[] = $errorMap->get($rowNum + 1, '');
-    fputcsv($output, $data);
+    $row = str_getcsv($line);
+    $data = [];
+    foreach ($headers as $i => $header) {
+        $data[$header] = $row[$i] ?? '';
+    }
+    $data['error'] = $errorMap->get($rowNum + 1, '');
+    fputcsv($csv, $data);
 }
 ```
 
 **Why this approach?**
 
-- Does **not** require storing all row data in the database (saves storage)
+- Does **not** require storing all row data in the database
 - Works with any file format (CSV, vCard)
-- Original file provides the definitive source of truth for row data
-- Trade-off: requires the original file to remain accessible (local disk or S3)
+- Original file is the definitive source of truth for row data
+- Trade-off: requires the original file to remain accessible
 
-**Edge case:** If the original file is deleted (e.g., cleanup policy), the error CSV endpoint returns 404. A production improvement would archive the original file for a configurable retention period.
+**Edge case:** If the original file is deleted (e.g., retention policy), the error CSV endpoint returns 404. A production improvement would archive original files for a configurable retention period.
 
 ---
 
-## 5. Error Handling & Isolation
+## 6. Error Handling & Isolation
 
 ### Per-Row Error Handling
 
@@ -250,7 +583,6 @@ foreach ($batchRows as $index => $row) {
         $validationErrors = $parser->validateRow($normalized);
 
         if (!empty($validationErrors)) {
-            // Record errors, skip row, continue batch
             $failedInBatch++;
             continue;
         }
@@ -275,7 +607,7 @@ foreach ($batchRows as $index => $row) {
 
 ---
 
-## 6. Concurrency, Idempotency & Recovery
+## 7. Concurrency, Idempotency & Recovery
 
 ### Q: What happens if the user uploads the same file twice?
 
@@ -366,7 +698,7 @@ The cancellation flow works in layers:
 
 ---
 
-## 7. Observability & Alerting
+## 8. Observability & Alerting
 
 ### Metrics
 
@@ -422,7 +754,7 @@ HAVING failure_rate_pct > 20;
 
 ---
 
-## 8. Production Awareness
+## 9. Production Awareness
 
 ### At 10× Scale
 
@@ -475,7 +807,7 @@ No existing Monica functionality is affected.
 
 ---
 
-## 9. Architecture Decision Records (ADR)
+## 10. Architecture Decision Records (ADR)
 
 ### ADR-1: Database (MySQL) vs Redis for Progress Tracking
 
@@ -513,7 +845,7 @@ No existing Monica functionality is affected.
 - **Per-import queue:** `imports-{importJobId}` — provides strict FIFO ordering per import and prevents one import from blocking another. But requires dynamic queue configuration and complicates monitoring.
 - **Per-account queue:** `imports-{accountId}` — prevents noisy-neighbor problem between tenants. Useful for SaaS but adds complexity.
 
-**Rationale:** A single queue with dedicated workers is simpler to operate and monitor. With the sync queue driver (testing) or a single Redis queue (production), jobs are processed FIFO within the queue. At 10× scale, we'd use Laravel Horizon with a dedicated queue named `imports` and multiple workers.
+**Rationale:** A single queue with dedicated workers is simpler to operate and monitor. With the database driver (development) or Redis (production), jobs are processed FIFO within the queue. Tests use the `sync` driver for deterministic execution. At 10× scale, we'd use Laravel Horizon with a dedicated queue named `imports` and multiple workers.
 
 **Trade-off:** If one import has 50,000 batches and another has 1, the large import could delay the small one. Mitigation: Use Laravel's `->onQueue('imports:high')` for small imports and `->onQueue('imports:low')` for large ones.
 
@@ -532,7 +864,7 @@ No existing Monica functionality is affected.
 
 ---
 
-## 10. Tests
+## 11. Tests
 
 ### Running Tests
 
@@ -577,7 +909,7 @@ If caching were needed (e.g., the list endpoint at very high traffic), the cache
 
 ---
 
-## 11. Files Changed/Added
+## 12. Files Changed/Added
 
 ### New Files
 
@@ -597,7 +929,8 @@ If caching were needed (e.g., the list endpoint at very high traffic), the cache
 
 ### Modified Files
 
-| File             | Change                                                         |
-| ---------------- | -------------------------------------------------------------- |
-| `routes/api.php` | Added `import` resource routes + cancel/errors/errors.csv      |
-| `phpunit.xml`    | Added `DB_TEST_DATABASE=:memory:` for in-memory SQLite testing |
+| File             | Change                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `routes/api.php` | Added `import` resource routes + cancel/errors/errors.csv + `get-token` route      |
+| `.env`           | Changed `QUEUE_CONNECTION=sync` → `QUEUE_CONNECTION=database` for async processing |
+| `phpunit.xml`    | Added `DB_TEST_DATABASE=:memory:` for in-memory SQLite testing                     |

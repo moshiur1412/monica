@@ -1,19 +1,9 @@
 <?php
 
+use App\Domains\Contact\Import\Api\Controllers\ImportController;
 use App\Domains\Settings\ManageUsers\Api\Controllers\UserController;
 use App\Domains\Vault\ManageVault\Api\Controllers\VaultController;
 use Illuminate\Support\Facades\Route;
-
-/*
-|--------------------------------------------------------------------------
-| API Routes
-|--------------------------------------------------------------------------
-|
-| Here is where you can register API routes for your application. These
-| routes are loaded by the bootstrap/app.php file and all of them will
-| be assigned to the "api" middleware group. Make something great!
-|
-*/
 
 Route::middleware('auth:sanctum')->name('api.')->group(function () {
     // users
@@ -22,4 +12,10 @@ Route::middleware('auth:sanctum')->name('api.')->group(function () {
 
     // vaults
     Route::apiResource('vaults', VaultController::class);
+
+    // imports
+    Route::apiResource('import', ImportController::class)->only(['index', 'show', 'store']);
+    Route::post('import/{import}/cancel', [ImportController::class, 'cancel']);
+    Route::get('import/{import}/errors', [ImportController::class, 'errors']);
+    Route::get('import/{import}/errors.csv', [ImportController::class, 'downloadErrors']);
 });

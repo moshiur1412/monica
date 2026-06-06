@@ -57,7 +57,7 @@ flowchart TB
 
     subgraph Storage["Persistence Layer"]
         J[("MySQL<br/>import_jobs table")]
-        K[("File Storage<br/>(local / S3)"]
+        K[("File Storage<br/>(local / S3)")]
         L[("Redis<br/>Queue + Cache")]
     end
 

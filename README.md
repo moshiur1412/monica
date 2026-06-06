@@ -374,11 +374,11 @@ Paginated list, newest first.
 }
 ```
 
-| Field                     | Type    | Description                                                          |
-| ------------------------- | ------- | -------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `processing_time_sec`     | `int    | null`                                                                | Elapsed (processing) or total (completed) seconds               |
-| `estimated_remaining_sec` | `int    | null`                                                                | Based on rolling rate; `0` if started >10s ago with no progress |
-| `errors`                  | `array` | First 10 errors; included when status is processing/completed/failed |
+| Field                     | Type            | Description                                                          |
+| ------------------------- | --------------- | -------------------------------------------------------------------- |
+| `processing_time_sec`     | `int` or `null` | Elapsed (processing) or total (completed) seconds                    |
+| `estimated_remaining_sec` | `int` or `null` | Based on rolling rate; `0` if started >10s ago with no progress      |
+| `errors`                  | `array`         | First 10 errors; included when status is processing/completed/failed |
 
 ### `POST /api/import/{id}/cancel` — Cancel Import
 

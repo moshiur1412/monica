@@ -43,7 +43,18 @@ class ProcessImportJob implements ShouldQueue
             return;
         }
 
-        $totalRows = $parser->countRows($importJob->original_file_path);
+        $content = Storage::disk('local')->get($importJob->original_file_path);
+
+        if ($content === null) {
+            $importJob->status = ImportJob::STATUS_FAILED;
+            $importJob->completed_at = now();
+            $importJob->save();
+
+            return;
+        }
+
+        $allRows = $parser->parseContent($content);
+        $totalRows = $allRows->count();
 
         $importJob->total_rows = $totalRows;
         $importJob->status = ImportJob::STATUS_PROCESSING;
@@ -61,13 +72,11 @@ class ProcessImportJob implements ShouldQueue
         $batchSize = $importJob->batch_size;
         $jobs = [];
 
-        for ($offset = 0; $offset < $totalRows; $offset += $batchSize) {
-            $limit = min($batchSize, $totalRows - $offset);
-
+        foreach ($allRows->chunk($batchSize) as $offset => $chunk) {
             $jobs[] = new ProcessImportBatchJob(
                 $this->importJobId,
                 $offset,
-                $limit,
+                $chunk->values()->toArray(),
                 $this->context,
             );
         }

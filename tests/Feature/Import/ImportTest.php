@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Models\Vault;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -293,8 +294,32 @@ class ImportTest extends TestCase
         $content = $response->getContent();
         $this->assertStringContainsString('Missing required field: name', $content);
         $this->assertStringContainsString("Invalid email: 'invalid-email'", $content);
-        $this->assertStringContainsString('John Doe', $content);
-        $this->assertStringContainsString('john@example.com', $content);
+        $this->assertStringContainsString('Bad Row', $content);
+        $this->assertStringContainsString('Jane', $content);
+        $this->assertStringNotContainsString('John Doe', $content);
+        $this->assertStringNotContainsString('john@example.com', $content);
+    }
+
+    #[Test]
+    public function it_returns_no_errors_message_when_csv_has_no_errors(): void
+    {
+        $filePath = 'imports/no_errors.csv';
+        Storage::disk('local')->put($filePath, "name,email,phone\nJohn Doe,john@example.com,+1234567890");
+
+        $importJob = ImportJob::factory()->completed()->create([
+            'account_id' => $this->account->id,
+            'user_id' => $this->user->id,
+            'original_file_path' => $filePath,
+            'errors' => [],
+        ]);
+
+        $response = $this->withToken($this->token)
+            ->get("/api/import/{$importJob->id}/errors.csv");
+
+        $response->assertStatus(200);
+        $content = $response->getContent();
+        $this->assertStringContainsString('No errors found.', $content);
+        $this->assertStringNotContainsString('John Doe', $content);
     }
 
     #[Test]
@@ -344,7 +369,7 @@ class ImportTest extends TestCase
         $job = new ProcessImportBatchJob(
             $importJob->id,
             0,
-            1,
+            [['name' => 'John Doe', 'email' => 'john@example.com', 'phone' => '+1234567890']],
             [
                 'account_id' => $this->account->id,
                 'vault_id' => $this->vault->id,
@@ -363,6 +388,135 @@ class ImportTest extends TestCase
             app(\App\Domains\Contact\Import\Services\ImportContactFromRow::class),
         ]);
 
+        $this->assertEquals(1, Contact::count());
+    }
+
+    #[Test]
+    public function it_invalidates_cache_on_new_import(): void
+    {
+        $cacheKey = "import_list_version:user:{$this->user->id}";
+
+        $versionBefore = Cache::get($cacheKey, 0);
+
+        $csvContent = "name,email,phone\nJohn Doe,john@example.com,+1234567890";
+        $csv = UploadedFile::fake()->createWithContent('contacts.csv', $csvContent);
+
+        $this->withToken($this->token)
+            ->postJson('/api/import', [
+                'file' => $csv,
+                'vault_id' => $this->vault->id,
+            ]);
+
+        $versionAfter = Cache::get($cacheKey, 0);
+        $this->assertGreaterThan($versionBefore, $versionAfter);
+    }
+
+    #[Test]
+    public function it_invalidates_cache_on_cancel(): void
+    {
+        $importJob = ImportJob::factory()->processing()->create([
+            'account_id' => $this->account->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        $cacheKey = "import_list_version:user:{$this->user->id}";
+        $versionBefore = Cache::get($cacheKey, 0);
+
+        $this->withToken($this->token)
+            ->postJson("/api/import/{$importJob->id}/cancel");
+
+        $versionAfter = Cache::get($cacheKey, 0);
+        $this->assertGreaterThan($versionBefore, $versionAfter);
+    }
+
+    #[Test]
+    public function it_caches_import_list(): void
+    {
+        ImportJob::factory()->count(3)->create([
+            'account_id' => $this->account->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        $response1 = $this->withToken($this->token)
+            ->getJson('/api/import');
+
+        $response1->assertStatus(200);
+        $this->assertCount(3, $response1->json('data'));
+    }
+
+    #[Test]
+    public function it_sets_status_to_failed_when_all_rows_fail(): void
+    {
+        $filePath = 'imports/all_fail.csv';
+        Storage::disk('local')->put($filePath, "name,email,phone\n,,\n,,\n,,");
+
+        $importJob = ImportJob::factory()->create([
+            'account_id' => $this->account->id,
+            'user_id' => $this->user->id,
+            'vault_id' => $this->vault->id,
+            'original_file_path' => $filePath,
+            'total_rows' => 0,
+            'status' => ImportJob::STATUS_PENDING,
+            'batch_size' => 50,
+        ]);
+
+        $job = new ProcessImportJob($importJob->id, [
+            'account_id' => $this->account->id,
+            'vault_id' => $this->vault->id,
+            'author_id' => $this->user->id,
+        ]);
+        $job->handle(app(\App\Domains\Contact\Import\Services\CsvParser::class));
+
+        $importJob->refresh();
+        $this->assertEquals('failed', $importJob->status);
+        $this->assertEquals(0, $importJob->processed_rows);
+        $this->assertEquals(3, $importJob->failed_rows);
+        $this->assertCount(3, $importJob->errors ?? []);
+    }
+
+    #[Test]
+    public function batch_job_saves_partial_progress_on_cancellation(): void
+    {
+        $filePath = 'imports/partial_cancel.csv';
+        Storage::disk('local')->put($filePath, "name,email,phone\nOne,one@test.com,1\nTwo,two@test.com,2\nThree,three@test.com,3");
+
+        $importJob = ImportJob::factory()->create([
+            'account_id' => $this->account->id,
+            'user_id' => $this->user->id,
+            'vault_id' => $this->vault->id,
+            'original_file_path' => $filePath,
+            'total_rows' => 3,
+            'status' => ImportJob::STATUS_CANCELLED,
+            'batch_size' => 50,
+        ]);
+
+        $rows = [
+            ['name' => 'One', 'email' => 'one@test.com', 'phone' => '1'],
+            ['name' => 'Two', 'email' => 'two@test.com', 'phone' => '2'],
+            ['name' => 'Three', 'email' => 'three@test.com', 'phone' => '3'],
+        ];
+
+        $job = new ProcessImportBatchJob(
+            $importJob->id,
+            0,
+            $rows,
+            [
+                'account_id' => $this->account->id,
+                'vault_id' => $this->vault->id,
+                'author_id' => $this->user->id,
+            ]
+        );
+
+        $handleMethod = new \ReflectionMethod($job, 'handle');
+        $handleMethod->setAccessible(true);
+
+        $handleMethod->invokeArgs($job, [
+            app(\App\Domains\Contact\Import\Services\CsvParser::class),
+            app(\App\Domains\Contact\Import\Services\ImportContactFromRow::class),
+        ]);
+
+        $importJob->refresh();
+        $this->assertTrue($importJob->isCancelled());
         $this->assertEquals(1, Contact::count());
     }
 }

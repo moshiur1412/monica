@@ -7,6 +7,7 @@ use App\Http\Controllers\ApiController;
 use App\Http\Resources\ImportJobResource;
 use App\Models\ImportJob;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 
 class ImportController extends ApiController
@@ -20,12 +21,21 @@ class ImportController extends ApiController
 
     public function index(Request $request)
     {
-        $imports = ImportJob::byAccount($request->user()->account_id)
-            ->byUser($request->user()->id)
-            ->orderBy('created_at', 'desc')
-            ->paginate($this->getLimitPerPage());
+        $userId = $request->user()->id;
+        $page = $request->integer('page', 1);
+        $perPage = $this->getLimitPerPage();
 
-        return ImportJobResource::collection($imports);
+        $version = Cache::get("import_list_version:user:{$userId}", 0);
+        $cacheKey = "import_list:user:{$userId}:v{$version}:page:{$page}:per_page:{$perPage}";
+
+        return Cache::remember($cacheKey, now()->addMinute(), function () use ($request) {
+            $imports = ImportJob::byAccount($request->user()->account_id)
+                ->byUser($request->user()->id)
+                ->orderBy('created_at', 'desc')
+                ->paginate($this->getLimitPerPage());
+
+            return ImportJobResource::collection($imports);
+        });
     }
 
     public function store(Request $request)
@@ -61,6 +71,8 @@ class ImportController extends ApiController
             'author_id' => $request->user()->id,
         ]);
 
+        $this->clearImportListCache($request->user()->id);
+
         return (new ImportJobResource($importJob))
             ->response()
             ->setStatusCode(201);
@@ -89,6 +101,8 @@ class ImportController extends ApiController
         $import->status = ImportJob::STATUS_CANCELLED;
         $import->cancelled_at = now();
         $import->save();
+
+        $this->clearImportListCache($request->user()->id);
 
         return new ImportJobResource($import);
     }
@@ -130,6 +144,17 @@ class ImportController extends ApiController
         $errors = $import->errors ?? [];
         $content = Storage::disk('local')->get($import->original_file_path);
 
+        $errorFilename = pathinfo($import->filename, PATHINFO_FILENAME).'_errors.csv';
+
+        if (empty($errors)) {
+            $csvContent = "error\nNo errors found.\n";
+
+            return response($csvContent, 200, [
+                'Content-Type' => 'text/csv',
+                'Content-Disposition' => 'attachment; filename="'.$errorFilename.'"',
+            ]);
+        }
+
         $errorMap = collect($errors)->groupBy('row')->map(function ($items) {
             return $items->pluck('message')->implode('; ');
         });
@@ -154,12 +179,20 @@ class ImportController extends ApiController
 
         $rowNum = 1;
         foreach ($lines as $line) {
+            $errorMsg = $errorMap->get($rowNum, '');
+
+            if (empty($errorMsg)) {
+                $rowNum++;
+
+                continue;
+            }
+
             $row = str_getcsv($line);
             $data = [];
             foreach ($headers as $index => $header) {
                 $data[$header] = isset($row[$index]) ? $row[$index] : '';
             }
-            $data['error'] = $errorMap->get($rowNum, '');
+            $data['error'] = $errorMsg;
             fputcsv($csv, $data);
             $rowNum++;
         }
@@ -168,11 +201,14 @@ class ImportController extends ApiController
         $csvContent = stream_get_contents($csv);
         fclose($csv);
 
-        $errorFilename = pathinfo($import->filename, PATHINFO_FILENAME).'_errors.csv';
-
         return response($csvContent, 200, [
             'Content-Type' => 'text/csv',
             'Content-Disposition' => 'attachment; filename="'.$errorFilename.'"',
         ]);
+    }
+
+    private function clearImportListCache(string $userId): void
+    {
+        Cache::increment("import_list_version:user:{$userId}");
     }
 }

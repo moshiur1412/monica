@@ -12,7 +12,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class ProcessImportBatchJob implements ShouldQueue
 {
@@ -22,15 +21,15 @@ class ProcessImportBatchJob implements ShouldQueue
 
     public int $offset;
 
-    public int $limit;
+    public array $rows;
 
     public array $context;
 
-    public function __construct(string $importJobId, int $offset, int $limit, array $context)
+    public function __construct(string $importJobId, int $offset, array $rows, array $context)
     {
         $this->importJobId = $importJobId;
         $this->offset = $offset;
-        $this->limit = $limit;
+        $this->rows = $rows;
         $this->context = $context;
     }
 
@@ -46,21 +45,21 @@ class ProcessImportBatchJob implements ShouldQueue
             return;
         }
 
-        if (! Storage::disk('local')->exists($importJob->original_file_path)) {
-            $this->fail(new \RuntimeException("Import file not found: {$importJob->original_file_path}"));
-
-            return;
-        }
-
-        $rows = $parser->parse($importJob->original_file_path);
-        $batchRows = $rows->slice($this->offset, $this->limit);
-
         $processedInBatch = 0;
         $failedInBatch = 0;
         $batchErrors = [];
 
-        foreach ($batchRows as $index => $row) {
+        foreach ($this->rows as $index => $row) {
             $rowNumber = $this->offset + $index + 1;
+
+            if ($processedInBatch > 0 && $processedInBatch % 10 === 0) {
+                $importJob->refresh();
+                if ($importJob->isCancelled()) {
+                    $this->saveBatchProgress($importJob, $processedInBatch, $failedInBatch, $batchErrors);
+
+                    return;
+                }
+            }
 
             try {
                 $normalized = $parser->normalizeRow($row);
@@ -89,6 +88,11 @@ class ProcessImportBatchJob implements ShouldQueue
             }
         }
 
+        $this->saveBatchProgress($importJob, $processedInBatch, $failedInBatch, $batchErrors);
+    }
+
+    private function saveBatchProgress(ImportJob $importJob, int $processedInBatch, int $failedInBatch, array $batchErrors): void
+    {
         DB::transaction(function () use ($importJob, $processedInBatch, $failedInBatch, $batchErrors) {
             $job = ImportJob::lockForUpdate()->findOrFail($importJob->id);
             $job->processed_rows += $processedInBatch;

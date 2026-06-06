@@ -3,26 +3,9 @@
 namespace App\Domains\Contact\Import\Services;
 
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Storage;
 
 class CsvParser
 {
-    public function parse(string $filePath): Collection
-    {
-        $content = Storage::disk('local')->get($filePath);
-
-        if ($content === null) {
-            throw new \RuntimeException("Cannot read file: {$filePath}");
-        }
-
-        return $this->parseContent($content);
-    }
-
-    public function countRows(string $filePath): int
-    {
-        return $this->parse($filePath)->count();
-    }
-
     public function parseContent(string $content): Collection
     {
         $rows = collect();
